@@ -234,7 +234,7 @@ class PointfootController:
         """
         # Concatenate observations into a single tensor and convert to float32
         input_tensor = np.concatenate([self.observations], axis=0)
-        input_tensor = input_tensor.astype(np.float32)
+        input_tensor = input_tensor.astype(np.float32).resize(1,-1)
         
         # Create a dictionary of inputs for the policy session
         inputs = {self.policy_input_names[0]: input_tensor}
