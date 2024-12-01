@@ -125,17 +125,37 @@ class PointfootController:
             for j in range(len(self.joint_names)):
                 # Interpolate between initial and default joint angles during stand mode
                 pos_des = self.default_joint_angles[j] * (1 - self.stand_percent) + self.init_state[self.joint_names[j]] * self.stand_percent
-                self.set_joint_command(j, pos_des)
+                self.set_joint_command_aligned(j, pos_des)
             # Increment the stand percentage over time
             self.stand_percent += 1 / (self.stand_duration * self.loop_frequency)
         else:
             # Switch to walk mode after standing
             self.mode = "WALK"
 
+    def align_robot_state(self, robot_state: datatypes.RobotState):
+        aligned_robot_state = copy.deepcopy(robot_state)
+        aligned_robot_state.q[1] = robot_state.q[3]
+        aligned_robot_state.dq[1] = robot_state.dq[3]
+        aligned_robot_state.tau[1] = robot_state.tau[3]
+        
+        aligned_robot_state.q[2] = robot_state.q[1]
+        aligned_robot_state.dq[2] = robot_state.dq[1]
+        aligned_robot_state.tau[2] = robot_state.tau[1]
+        
+        aligned_robot_state.q[3] = robot_state.q[4]
+        aligned_robot_state.dq[3] = robot_state.dq[4]
+        aligned_robot_state.tau[3] = robot_state.tau[4]
+        
+        aligned_robot_state.q[4] = robot_state.q[2]
+        aligned_robot_state.dq[4] = robot_state.dq[2]
+        aligned_robot_state.tau[4] = robot_state.tau[2]
+        
+        return aligned_robot_state
+    
     # Handle the walk mode where the robot moves based on computed actions
     def handle_walk_mode(self):
         # Update the temporary robot state and IMU data
-        self.robot_state_tmp = copy.deepcopy(self.robot_state)
+        self.robot_state_tmp = self.align_robot_state(copy.deepcopy(self.robot_state))
         self.imu_data_tmp = copy.deepcopy(self.imu_data)
 
         # Execute actions every 'decimation' iterations
@@ -166,7 +186,7 @@ class PointfootController:
 
             # Compute the desired joint position and set it
             pos_des = self.actions[i] * self.control_cfg['action_scale_pos'] + self.init_joint_angles[i]
-            self.set_joint_command(i, pos_des)
+            self.set_joint_command_aligned(i, pos_des)
 
             # Save the last action for reference
             self.last_actions[i] = self.actions[i]
@@ -255,6 +275,19 @@ class PointfootController:
         position (float): The desired position of the joint.
         """
         self.robot_cmd.q[joint_index] = position
+        
+    def set_joint_command_aligned(self, joint_index, position):
+        
+        if joint_index == 2:
+            self.robot_cmd.q[1] = position
+        elif joint_index == 4:
+            self.robot_cmd.q[2] = position
+        elif joint_index == 1:
+            self.robot_cmd.q[3] = position
+        elif joint_index == 3:
+            self.robot_cmd.q[4] = position
+        else:
+            self.robot_cmd.q[joint_index] = position
 
     def update(self):
         """
@@ -305,7 +338,7 @@ class PointfootController:
         Parameters:
         robot_state (datatypes.RobotState): The current state of the robot.
         """
-        self.robot_state = self.align_joint_order(robot_state)
+        self.robot_state = robot_state
 
     # Callback function for receiving imu data
     def imu_data_callback(self, imu_data: datatypes.ImuData):
