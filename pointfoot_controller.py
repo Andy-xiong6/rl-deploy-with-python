@@ -304,32 +304,6 @@ class PointfootController:
         # Publish the robot command
         self.robot.publishRobotCmd(self.robot_cmd)
         
-    def align_joint_order(self, robot_state: datatypes.RobotState):
-        
-        aligned_robot_state = copy.deepcopy(robot_state)
-        
-        aligned_robot_state.q[1] = robot_state.q[3]
-        aligned_robot_state.dq[1] = robot_state.dq[3]
-        aligned_robot_state.tau[1] = robot_state.tau[3]
-        
-        aligned_robot_state.q[2] = robot_state.q[1]
-        aligned_robot_state.dq[2] = robot_state.dq[1]
-        aligned_robot_state.tau[2] = robot_state.tau[1]
-        
-        aligned_robot_state.q[3] = robot_state.q[4]
-        aligned_robot_state.dq[3] = robot_state.dq[4]
-        aligned_robot_state.tau[3] = robot_state.tau[4]
-        
-        aligned_robot_state.q[4] = robot_state.q[2]
-        aligned_robot_state.dq[4] = robot_state.dq[2]
-        aligned_robot_state.tau[4] = robot_state.tau[2]
-        
-        aligned_robot_state.q[5] = robot_state.q[5]
-        aligned_robot_state.dq[5] = robot_state.dq[5]
-        aligned_robot_state.tau[5] = robot_state.tau[5]
-        
-        return aligned_robot_state
-        
     # Callback function for receiving robot command data
     def robot_state_callback(self, robot_state: datatypes.RobotState):
         """
