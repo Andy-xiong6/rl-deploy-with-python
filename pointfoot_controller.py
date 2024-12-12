@@ -12,6 +12,7 @@ import limxsdk.robot.Rate as Rate
 import limxsdk.robot.Robot as Robot
 import limxsdk.robot.RobotType as RobotType
 import limxsdk.datatypes as datatypes
+import time
 
 class PointfootController:
     def __init__(self, model_dir, robot, robot_type):
@@ -67,7 +68,7 @@ class PointfootController:
         self.robot.subscribeSensorJoy(self.sensor_joy_callback_partial)
         
         # Initialize gait phase and gait command
-        self.gait_command[0] = 1.0 # Gait frequency range [Hz] [1.5-2.5]
+        self.gait_command[0] = 2.0 # Gait frequency range [Hz] [1.5-2.5]
         self.gait_command[1] = 0.5 # Phase offset range [0-1]
         self.gait_command[2] = 0.5 # Contact duration range [0-1]
 
@@ -208,7 +209,6 @@ class PointfootController:
             torch.tensor((self.loop_count / self.loop_frequency) * self.gait_command[0], dtype=torch.float32, device='cpu'), 
             1.0
         )
-        print(gait_indices)
         # Convert to sin/cos representation
         sin_phase = torch.sin(2 * torch.pi * gait_indices)
         cos_phase = torch.cos(2 * torch.pi * gait_indices)
@@ -390,7 +390,7 @@ if __name__ == '__main__':
     # Initialize the robot with the provided IP address
     if not robot.init(robot_ip):
         sys.exit()
-
+    time.sleep(3)
     # Create and run the PointfootController
     controller = PointfootController(f'{os.path.dirname(os.path.abspath(__file__))}/model/pointfoot', robot, robot_type)
     controller.run()
