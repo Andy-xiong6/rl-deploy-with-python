@@ -38,7 +38,7 @@ PointfootCfg:
 
   size:
     actions_size: 6
-    observations_size: 27
+    observations_size: 32
     commands_size: 3
 
   stand_mode:

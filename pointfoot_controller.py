@@ -2,6 +2,7 @@ import os
 import sys
 import copy
 import numpy as np
+import torch
 import yaml
 import onnxruntime as ort
 from scipy.spatial.transform import Rotation as R
@@ -64,6 +65,11 @@ class PointfootController:
         # Set up a callback to receive updated SensorJoy
         self.sensor_joy_callback_partial = partial(self.sensor_joy_callback)
         self.robot.subscribeSensorJoy(self.sensor_joy_callback_partial)
+        
+        # Initialize gait phase and gait command
+        self.gait_command[0] = 1.0 # Gait frequency range [Hz] [1.5-2.5]
+        self.gait_command[1] = 0.5 # Phase offset range [0-1]
+        self.gait_command[2] = 0.5 # Contact duration range [0-1]
 
     # Load the configuration from a YAML file
     def load_config(self, config_file):
@@ -82,6 +88,7 @@ class PointfootController:
         self.imu_orientation_offset = np.array(list(config['PointfootCfg']['imu_orientation_offset'].values()))
         self.user_cmd_cfg = config['PointfootCfg']['user_cmd_scales']
         self.loop_frequency = config['PointfootCfg']['loop_frequency']
+        self.decimation = config['PointfootCfg']['control']['decimation']
         
         # Initialize variables for actions, observations, and commands
         self.actions = np.zeros(self.actions_size)
@@ -95,7 +102,8 @@ class PointfootController:
         self.stand_percent = 0  # percentage of time the robot has spent in stand mode
         self.policy_session = None  # ONNX model session for policy inference
         self.joint_num = len(self.joint_names)  # number of joints
-        self.commands = np.zeros(3)
+        self.gait_phase = np.zeros(2)
+        self.gait_command = np.zeros(3)
 
         # Initialize joint angles based on the initial configuration
         self.init_joint_angles = np.zeros(len(self.joint_names))
@@ -190,6 +198,22 @@ class PointfootController:
 
             # Save the last action for reference
             self.last_actions[i] = self.actions[i]
+            
+    def compute_gait_phase(self):
+        """
+        Computes the gait phase based on the current loop count and the gait period.
+        """
+        # Calculate gait indices
+        gait_indices = torch.remainder(
+            torch.tensor((self.loop_count / self.loop_frequency) * self.gait_command[0], dtype=torch.float32, device='cpu'), 
+            1.0
+        )
+        print(gait_indices)
+        # Convert to sin/cos representation
+        sin_phase = torch.sin(2 * torch.pi * gait_indices)
+        cos_phase = torch.cos(2 * torch.pi * gait_indices)
+        
+        return torch.stack([sin_phase, cos_phase], dim=0)
     
     def compute_observation(self):
         # Convert IMU orientation from quaternion to Euler angles (ZYX convention)
@@ -224,6 +248,10 @@ class PointfootController:
 
         # Apply scaling to the command inputs (velocity commands)
         scaled_commands = np.dot(command_scaler, self.commands)
+        
+        # Compute the gait phase and gait command
+        gait_phase = self.compute_gait_phase()
+        gait_command = torch.tensor(self.gait_command, dtype=torch.float32)
 
         # Create the observation vector by concatenating various state variables:
         # - Base angular velocity (scaled)
@@ -238,7 +266,9 @@ class PointfootController:
             (joint_positions - self.init_joint_angles) * self.obs_scales['dof_pos'],  # Scaled joint positions
             joint_velocities * self.obs_scales['dof_vel'],  # Scaled joint velocities
             actions,  # Last actions taken by the robot
-            scaled_commands  # Scaled velocity commands from user input
+            scaled_commands,  # Scaled velocity commands from user input
+            gait_phase, # Gait phase
+            gait_command,  # Gait command
         ])
         
         # Clip the observation values to within the specified limits for stability
