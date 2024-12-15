@@ -2,8 +2,8 @@
 
 ## Fork仓库进行的主要改动：
 - 通过[bipedal_locomotion_isaaclab](https://github.com/Andy-xiong6/bipedal_locomotion_isaaclab)训练得到的policy中，关节顺序与原部署代码仓库不同，因此添加了校正关节顺序的代码，具体如下：
-  原来的关节顺序为：0: abad_L  1: hip_L   2: knee_L   3: abad_R    4: hip_R   5: knee_R
-  校正后的关节顺序：0: abad_L  1: abad_R  2: hip_L    3: hip_R     4: knee_L  5: knee_R
+  原来的关节顺序为：0: abad_L  1: hip_L   2: knee_L   3: abad_R    4: hip_R   5: knee_R   
+  校正后的关节顺序：0: abad_L  1: abad_R  2: hip_L    3: hip_R     4: knee_L  5: knee_R   
   ```
   robot_state_aligned[0] = robot_state[0]
   robot_state_aligned[1] = robot_state[3]
