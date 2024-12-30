@@ -13,6 +13,7 @@ import limxsdk.robot.Robot as Robot
 import limxsdk.robot.RobotType as RobotType
 import limxsdk.datatypes as datatypes
 import time
+from collections import deque
 
 class PointfootController:
     def __init__(self, model_dir, robot, robot_type):
@@ -71,6 +72,11 @@ class PointfootController:
         self.gait_command[0] = 2.0 # Gait frequency range [Hz] [1.5-2.5]
         self.gait_command[1] = 0.5 # Phase offset range [0-1]
         self.gait_command[2] = 0.5 # Contact duration range [0-1]
+        
+        # add a deque to store the observation history
+        self.history_length = 1         # Default history length to 1
+        self.single_obs_length = 0      # Initialize the length of a single observation
+        self.history_queue = deque(maxlen=self.history_length)
 
     # Load the configuration from a YAML file
     def load_config(self, config_file):
@@ -85,7 +91,8 @@ class PointfootController:
         self.rl_cfg = config['PointfootCfg']['normalization']
         self.obs_scales = config['PointfootCfg']['normalization']['obs_scales']
         self.actions_size = config['PointfootCfg']['size']['actions_size']
-        self.observations_size = config['PointfootCfg']['size']['observations_size']
+        self.history_length = config['PointfootCfg']['size']['observations_history_length']
+        self.observations_size = config['PointfootCfg']['size']['observations_size'] * self.history_length
         self.imu_orientation_offset = np.array(list(config['PointfootCfg']['imu_orientation_offset'].values()))
         self.user_cmd_cfg = config['PointfootCfg']['user_cmd_scales']
         self.loop_frequency = config['PointfootCfg']['loop_frequency']
@@ -216,66 +223,59 @@ class PointfootController:
         return torch.stack([sin_phase, cos_phase], dim=0)
     
     def compute_observation(self):
-        # Convert IMU orientation from quaternion to Euler angles (ZYX convention)
         imu_orientation = np.array(self.imu_data_tmp.quat)
         q_wi = R.from_quat(imu_orientation).as_euler('zyx')  # Quaternion to Euler ZYX conversion
         inverse_rot = R.from_euler('zyx', q_wi).inv().as_matrix()  # Get the inverse rotation matrix
 
-        # Project the gravity vector (pointing downwards) into the body frame
-        gravity_vector = np.array([0, 0, -1])  # Gravity in world frame (z-axis down)
-        projected_gravity = np.dot(inverse_rot, gravity_vector)  # Transform gravity into body frame
-
-        # Retrieve base angular velocity from the IMU data
+        gravity_vector = np.array([0, 0, -1])  # Gravity in world frame
+        projected_gravity = np.dot(inverse_rot, gravity_vector)
+        
         base_ang_vel = np.array(self.imu_data_tmp.gyro)
-        # Apply IMU orientation offset correction (using Euler angles)
-        rot = R.from_euler('zyx', self.imu_orientation_offset).as_matrix()  # Rotation matrix for offset correction
-        base_ang_vel = np.dot(rot, base_ang_vel)  # Apply correction to angular velocity
-        projected_gravity = np.dot(rot, projected_gravity)  # Apply correction to projected gravity
+        rot = R.from_euler('zyx', self.imu_orientation_offset).as_matrix()
+        base_ang_vel = np.dot(rot, base_ang_vel)
+        projected_gravity = np.dot(rot, projected_gravity)
 
-        # Retrieve joint positions and velocities from the robot state
         joint_positions = np.array(self.robot_state_tmp.q)
         joint_velocities = np.array(self.robot_state_tmp.dq)
 
-        # Retrieve the last actions that were applied to the robot
         actions = np.array(self.last_actions)
 
-        # Create a command scaler matrix for linear and angular velocities
         command_scaler = np.diag([
-            self.user_cmd_cfg['lin_vel_x'],  # Scale factor for linear velocity in x direction
-            self.user_cmd_cfg['lin_vel_y'],  # Scale factor for linear velocity in y direction
-            self.user_cmd_cfg['ang_vel_yaw']  # Scale factor for yaw (angular velocity)
+            self.user_cmd_cfg['lin_vel_x'],
+            self.user_cmd_cfg['lin_vel_y'],
+            self.user_cmd_cfg['ang_vel_yaw']
         ])
-
-        # Apply scaling to the command inputs (velocity commands)
         scaled_commands = np.dot(command_scaler, self.commands)
-        
-        # Compute the gait phase and gait command
+
         gait_phase = self.compute_gait_phase()
         gait_command = torch.tensor(self.gait_command, dtype=torch.float32)
 
-        # Create the observation vector by concatenating various state variables:
-        # - Base angular velocity (scaled)
-        # - Projected gravity vector
-        # - Joint positions (difference from initial angles, scaled)
-        # - Joint velocities (scaled)
-        # - Last actions applied to the robot
-        # - Scaled command inputs
-        obs = np.concatenate([
-            base_ang_vel * self.obs_scales['ang_vel'],  # Scaled base angular velocity
-            projected_gravity,  # Projected gravity vector in body frame
-            (joint_positions - self.init_joint_angles) * self.obs_scales['dof_pos'],  # Scaled joint positions
-            joint_velocities * self.obs_scales['dof_vel'],  # Scaled joint velocities
-            actions,  # Last actions taken by the robot
-            scaled_commands,  # Scaled velocity commands from user input
-            gait_phase, # Gait phase
-            gait_command,  # Gait command
+        current_obs = np.concatenate([
+            base_ang_vel * self.obs_scales['ang_vel'],
+            projected_gravity,
+            (joint_positions - self.init_joint_angles) * self.obs_scales['dof_pos'],
+            joint_velocities * self.obs_scales['dof_vel'],
+            actions,
+            scaled_commands,
+            gait_phase,
+            gait_command
         ])
-        
-        # Clip the observation values to within the specified limits for stability
+
+        if self.single_obs_length == 0:
+            self.single_obs_length = len(current_obs)
+
+        # Fill the history queue with the current observation if it is empty
+        while len(self.history_queue) < self.history_length:
+            self.history_queue.append(current_obs)
+
+        self.history_queue.append(current_obs)
+
+        history_obs = np.concatenate(list(self.history_queue))
+
         self.observations = np.clip(
-            obs, 
-            -self.rl_cfg['clip_scales']['clip_observations'],  # Lower limit for clipping
-            self.rl_cfg['clip_scales']['clip_observations']  # Upper limit for clipping
+            history_obs,
+            -self.rl_cfg['clip_scales']['clip_observations'],
+            self.rl_cfg['clip_scales']['clip_observations']
         )
     
     def compute_actions(self):
