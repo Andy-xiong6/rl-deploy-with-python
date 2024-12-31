@@ -23,14 +23,20 @@ class PointfootController:
         # Load configuration and model file paths based on robot type
         self.config_file = f'{model_dir}/{self.robot_type}/params.yaml'
         self.model_file = f'{model_dir}/{self.robot_type}/policy/policy.onnx'
+        self.encoder_file = f'{model_dir}/{self.robot_type}/policy/encoder.onnx'
 
         # Load configuration settings from the YAML file
         self.load_config(self.config_file)
 
-        # Load the ONNX model and set up input and output names
+        # Load the ONNX model of actor-critic and set up input and output names
         self.policy_session = ort.InferenceSession(self.model_file)
         self.policy_input_names = [self.policy_session.get_inputs()[0].name]
         self.policy_output_names = [self.policy_session.get_outputs()[0].name]
+        
+        # Load the ONNX model of mlp encoder and set up input and output names
+        self.encoder_session = ort.InferenceSession(self.encoder_file)
+        self.encoder_input_names = [self.encoder_session.get_inputs()[0].name]
+        self.encoder_output_names = [self.encoder_session.get_outputs()[0].name]
 
         # Prepare robot command structure with default values for mode, q, dq, tau, Kp, Kd
         self.robot_cmd = datatypes.RobotCmd()
@@ -73,10 +79,15 @@ class PointfootController:
         self.gait_command[1] = 0.5 # Phase offset range [0-1]
         self.gait_command[2] = 0.5 # Contact duration range [0-1]
         
-        # add a deque to store the observation history
-        self.history_length = 1         # Default history length to 1
-        self.single_obs_length = 0      # Initialize the length of a single observation
-        self.history_queue = deque(maxlen=self.history_length)
+        # add a deque to store the observation history (FIFO)
+        self.base_ang_vel_queue = deque(maxlen=self.history_length)
+        self.projected_gravity_queue = deque(maxlen=self.history_length)
+        self.joint_positions_queue = deque(maxlen=self.history_length)
+        self.joint_velocities_queue = deque(maxlen=self.history_length)
+        self.actions_queue = deque(maxlen=self.history_length)
+        self.scaled_commands_queue = deque(maxlen=self.history_length)
+        self.gait_phase_queue = deque(maxlen=self.history_length)
+        self.gait_command_queue = deque(maxlen=self.history_length)
 
     # Load the configuration from a YAML file
     def load_config(self, config_file):
@@ -92,7 +103,8 @@ class PointfootController:
         self.obs_scales = config['PointfootCfg']['normalization']['obs_scales']
         self.actions_size = config['PointfootCfg']['size']['actions_size']
         self.history_length = config['PointfootCfg']['size']['observations_history_length']
-        self.observations_size = config['PointfootCfg']['size']['observations_size'] * self.history_length
+        self.latent_size = config['PointfootCfg']['size']['latent_size']
+        self.observations_size = config['PointfootCfg']['size']['observations_size'] * self.history_length + self.latent_size
         self.imu_orientation_offset = np.array(list(config['PointfootCfg']['imu_orientation_offset'].values()))
         self.user_cmd_cfg = config['PointfootCfg']['user_cmd_scales']
         self.loop_frequency = config['PointfootCfg']['loop_frequency']
@@ -109,6 +121,7 @@ class PointfootController:
         self.loop_count = 0  # loop iteration count
         self.stand_percent = 0  # percentage of time the robot has spent in stand mode
         self.policy_session = None  # ONNX model session for policy inference
+        self.encoder_session = None  # ONNX model session for encoder inference
         self.joint_num = len(self.joint_names)  # number of joints
         self.gait_phase = np.zeros(2)
         self.gait_command = np.zeros(3)
@@ -222,7 +235,29 @@ class PointfootController:
         
         return torch.stack([sin_phase, cos_phase], dim=0)
     
+    def compute_encoder_latent(self, current_obs):
+        '''
+        Computes the encoder latent vector based on the current observation.
+        '''
+        # Concatenate observations into a single tensor and convert to float32
+        input_tensor = np.concatenate([current_obs], axis=0)
+        input_tensor = input_tensor.astype(np.float32).reshape(1,-1)
+        
+        # Create a dictionary of inputs for the policy session
+        inputs = {self.encoder_input_names[0]: input_tensor}
+        
+        # Run the policy session and get the output
+        output = self.encoder_session.run(self.encoder_output_names, inputs)
+        
+        # Flatten the output and store it as actions
+        return np.array(output).flatten()
+        
+        
     def compute_observation(self):
+        '''
+        Computes the observation based on the current robot state, IMU data, and commands.
+        And stores the observation in the history queue.
+        '''
         imu_orientation = np.array(self.imu_data_tmp.quat)
         q_wi = R.from_quat(imu_orientation).as_euler('zyx')  # Quaternion to Euler ZYX conversion
         inverse_rot = R.from_euler('zyx', q_wi).inv().as_matrix()  # Get the inverse rotation matrix
@@ -250,33 +285,48 @@ class PointfootController:
         gait_phase = self.compute_gait_phase()
         gait_command = torch.tensor(self.gait_command, dtype=torch.float32)
 
-        current_obs = np.concatenate([
-            base_ang_vel * self.obs_scales['ang_vel'],
-            projected_gravity,
-            (joint_positions - self.init_joint_angles) * self.obs_scales['dof_pos'],
-            joint_velocities * self.obs_scales['dof_vel'],
-            actions,
-            scaled_commands,
-            gait_phase,
-            gait_command
-        ])
-
-        if self.single_obs_length == 0:
-            self.single_obs_length = len(current_obs)
-
         # Fill the history queue with the current observation if it is empty
-        while len(self.history_queue) < self.history_length:
-            self.history_queue.append(current_obs)
+        while len(self.base_ang_vel_queue) < self.history_length:
+            self.base_ang_vel_queue.append(base_ang_vel * self.obs_scales['ang_vel'])
+            self.projected_gravity_queue.append(projected_gravity)
+            self.joint_positions_queue.append((joint_positions - self.init_joint_angles) * self.obs_scales['dof_pos'])
+            self.joint_velocities_queue.append(joint_velocities * self.obs_scales['dof_vel'])
+            self.actions_queue.append(actions)
+            self.scaled_commands_queue.append(scaled_commands)
+            self.gait_phase_queue.append(gait_phase)
+            self.gait_command_queue.append(gait_command)
 
-        self.history_queue.append(current_obs)
-
-        history_obs = np.concatenate(list(self.history_queue))
-
-        self.observations = np.clip(
+        # Append the current observation to the history queue
+        self.base_ang_vel_queue.append(base_ang_vel * self.obs_scales['ang_vel'])
+        self.projected_gravity_queue.append(projected_gravity)
+        self.joint_positions_queue.append((joint_positions - self.init_joint_angles) * self.obs_scales['dof_pos'])
+        self.joint_velocities_queue.append(joint_velocities * self.obs_scales['dof_vel'])
+        self.actions_queue.append(actions)
+        self.scaled_commands_queue.append(scaled_commands)
+        self.gait_phase_queue.append(gait_phase)
+        self.gait_command_queue.append(gait_command)
+        
+        history_obs = np.concatenate([
+            np.array(self.base_ang_vel_queue).flatten(),
+            np.array(self.projected_gravity_queue).flatten(),
+            np.array(self.joint_positions_queue).flatten(),
+            np.array(self.joint_velocities_queue).flatten(),
+            np.array(self.actions_queue).flatten(),
+            np.array(self.scaled_commands_queue).flatten(),
+            np.array(self.gait_phase_queue).flatten(),
+            np.array(self.gait_command_queue).flatten()
+        ])
+        
+        observations = np.clip(
             history_obs,
             -self.rl_cfg['clip_scales']['clip_observations'],
             self.rl_cfg['clip_scales']['clip_observations']
         )
+        
+        encoder_latent = self.compute_encoder_latent(observations)
+        
+        self.observations = np.concatenate([history_obs, encoder_latent])
+        
     
     def compute_actions(self):
         """
