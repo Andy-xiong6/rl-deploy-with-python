@@ -3,11 +3,11 @@
 ## MLP分支进行的主要改动
 - 该分支用于加入了proprioceptive encoder后的训练和测试
 
-- 在'rl-deploy-with-python/pointfoot_controller.py'中加入了FIFO队列，用于存储历史观测。
+- 在[pointfoot_controller.py](pointfoot_controller.py)中加入了FIFO队列，用于存储历史观测。
 
-- 在'rl-deply-with-python/model/pointfoot/PF_P441C/policy'中加入了encoder.onnx，用于存储训练时得到的proprioceptive encoder。
+- 在[policy文件夹](model/pointfoot/PF_P441C/policy/)中加入了encoder.onnx，用于存储训练时得到的proprioceptive encoder。
 
-- 在'rl-deply-with-python/model/pointfoot/PF_P441C/params.yaml'中加入了observations_history_length和latent_size参数，用于设置历史观测长度和隐空间维度。
+- 在[params.yaml](model/pointfoot/PF_P441C/params.yaml)中加入了observations_history_length和latent_size参数，用于设置历史观测长度和隐空间维度。
 
 ## Fork仓库进行的主要改动：
 - 通过[bipedal_locomotion_isaaclab](https://github.com/Andy-xiong6/bipedal_locomotion_isaaclab)训练得到的policy中，关节顺序与原部署代码仓库不同，因此添加了校正关节顺序的代码，具体如下：     
