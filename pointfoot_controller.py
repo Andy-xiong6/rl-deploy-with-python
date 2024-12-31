@@ -293,7 +293,7 @@ class PointfootController:
             self.joint_velocities_queue.append(joint_velocities * self.obs_scales['dof_vel'])
             self.actions_queue.append(actions)
             self.scaled_commands_queue.append(scaled_commands)
-            self.gait_phase_queue.append(gait_phase)
+            self.gait_phase_queue.append(gait_phase.cpu().numpy())
             self.gait_command_queue.append(gait_command)
 
         # Append the current observation to the history queue
@@ -303,8 +303,8 @@ class PointfootController:
         self.joint_velocities_queue.append(joint_velocities * self.obs_scales['dof_vel'])
         self.actions_queue.append(actions)
         self.scaled_commands_queue.append(scaled_commands)
-        self.gait_phase_queue.append(gait_phase)
-        self.gait_command_queue.append(gait_command)
+        self.gait_phase_queue.append(gait_phase.cpu().numpy())
+        self.gait_command_queue.append(gait_command.cpu().numpy())
         
         history_obs = np.concatenate([
             np.array(self.base_ang_vel_queue).flatten(),
