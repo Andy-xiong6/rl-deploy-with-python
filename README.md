@@ -1,6 +1,36 @@
 # rl-deploy-with-python
 
+## MLP分支进行的主要改动
+- 该分支用于加入了proprioceptive encoder后的训练和测试
 
+- 在'rl-deploy-with-python/pointfoot_controller.py'中加入了FIFO队列，用于存储历史观测。
+
+- 在'rl-deply-with-python/model/pointfoot/PF_P441C/policy'中加入了encoder.onnx，用于存储训练时得到的proprioceptive encoder。
+
+- 在'rl-deply-with-python/model/pointfoot/PF_P441C/params.yaml'中加入了observations_history_length和latent_size参数，用于设置历史观测长度和隐空间维度。
+
+## Fork仓库进行的主要改动：
+- 通过[bipedal_locomotion_isaaclab](https://github.com/Andy-xiong6/bipedal_locomotion_isaaclab)训练得到的policy中，关节顺序与原部署代码仓库不同，因此添加了校正关节顺序的代码，具体如下：     
+  原来的关节顺序为：0: abad_L  1: hip_L   2: knee_L   3: abad_R    4: hip_R   5: knee_R   
+  校正后的关节顺序：0: abad_L  1: abad_R  2: hip_L    3: hip_R     4: knee_L  5: knee_R   
+  ```
+  robot_state_aligned[0] = robot_state[0]
+  robot_state_aligned[1] = robot_state[3]
+  robot_state_aligned[2] = robot_state[1]
+  robot_state_aligned[3] = robot_state[4]
+  robot_state_aligned[4] = robot_state[2]
+  robot_state_aligned[5] = robot_state[5]
+  ```
+- 发送关节控制指令时顺序也需要校正：
+  ```
+  robot_cmd.q[0] = actions[0] * action_scale_pos + init_joint_angles[0]
+  robot_cmd.q[1] = actions[2] * action_scale_pos + init_joint_angles[2]
+  robot_cmd.q[2] = actions[4] * action_scale_pos + init_joint_angles[4]
+  robot_cmd.q[3] = actions[1] * action_scale_pos + init_joint_angles[1]
+  robot_cmd.q[4] = actions[3] * action_scale_pos + init_joint_angles[3]
+  robot_cmd.q[5] = actions[5] * action_scale_pos + init_joint_angles[5]
+  
+  ```
 
 ## 1. 运行仿真
 
